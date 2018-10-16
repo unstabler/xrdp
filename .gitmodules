@@ -1,7 +1,7 @@
 [submodule "librfxcodec"]
 	path = librfxcodec
-	url = https://github.com/neutrinolabs/librfxcodec.git
-	branch = .
+	url = https://github.com/Nexarian/librfxcodec.git
+	branch = egfx_mainline_merge
 	ignore = untracked
 
 [submodule "libpainter"]
