@@ -627,7 +627,14 @@ xrdp_channel_drdynvc_start(struct xrdp_channel *self)
     struct mcs_channel_item *ci;
     struct mcs_channel_item *dci;
 
-    LOG_DEVEL(LOG_LEVEL_TRACE, "xrdp_channel_drdynvc_start:");
+    LOG_DEVEL(LOG_LEVEL_TRACE, "xrdp_channel_drdynvc_start: drdynvc_channel_id %d", self->drdynvc_channel_id);
+
+    if (self->drdynvc_channel_id != -1)
+    {
+        LOG_DEVEL(LOG_LEVEL_TRACE, "xrdp_channel_drdynvc_start: already started");
+        return 0;
+    }
+
     dci = NULL;
     count = self->mcs_layer->channel_list->count;
     for (index = 0; index < count; index++)
