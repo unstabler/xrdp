@@ -36,6 +36,9 @@
 static int
 lib_mod_process_message(struct mod *mod, struct stream *s);
 
+static int
+send_server_monitor_resize(struct mod *mod, struct stream *s);
+
 /******************************************************************************/
 static int
 lib_send_copy(struct mod *mod, struct stream *s)
@@ -270,19 +273,7 @@ lib_mod_connect(struct mod *mod)
     if (error == 0)
     {
         /* send screen size message */
-        init_stream(s, 8192);
-        s_push_layer(s, iso_hdr, 4);
-        out_uint16_le(s, 103);
-        out_uint32_le(s, 300);
-        out_uint32_le(s, mod->width);
-        out_uint32_le(s, mod->height);
-        out_uint32_le(s, mod->bpp);
-        out_uint32_le(s, 0);
-        s_mark_end(s);
-        len = (int)(s->end - s->data);
-        s_pop_layer(s, iso_hdr);
-        out_uint32_le(s, len);
-        lib_send_copy(mod, s);
+        send_server_monitor_resize(mod, s);
     }
 
     if (error == 0)
@@ -1298,6 +1289,28 @@ process_server_paint_rect_shmem_ex(struct mod *amod, struct stream *s)
     g_free(lcrects);
     g_free(ldrects);
 
+    return rv;
+}
+
+/******************************************************************************/
+/* return error */
+static int
+send_server_monitor_resize(struct mod *mod, struct stream *s)
+{
+    /* send screen size message */
+    init_stream(s, 8192);
+    s_push_layer(s, iso_hdr, 4);
+    out_uint16_le(s, 103);
+    out_uint32_le(s, 300);
+    out_uint32_le(s, mod->width);
+    out_uint32_le(s, mod->height);
+    out_uint32_le(s, mod->bpp);
+    out_uint32_le(s, 0);
+    s_mark_end(s);
+    int len = (int)(s->end - s->data);
+    s_pop_layer(s, iso_hdr);
+    out_uint32_le(s, len);
+    int rv = lib_send_copy(mod, s);
     return rv;
 }
 

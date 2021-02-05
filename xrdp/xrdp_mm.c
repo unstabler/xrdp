@@ -38,17 +38,15 @@
 #include "xrdp_encoder.h"
 #include "xrdp_sockets.h"
 
-#define LLOG_LEVEL 1
+#define LLOG_LEVEL 6
 #define LLOGLN(_level, _args) \
-  do \
   { \
     if (_level < LLOG_LEVEL) \
     { \
         g_write("xrdp:xrdp_mm [%10.10u]: ", g_time3()); \
         g_writeln _args ; \
     } \
-  } \
-  while (0)
+  }
 
 /*****************************************************************************/
 struct xrdp_mm *
@@ -430,6 +428,7 @@ xrdp_mm_setup_mod1(struct xrdp_mm *self)
 
         if (self->mod != 0)
         {
+            /////////////POSSIBLE PLACE WHERE I NEED TO ADD MONITOR RESIZE FUNCTION
             self->mod->wm = (long)(self->wm);
             self->mod->server_begin_update = server_begin_update;
             self->mod->server_end_update = server_end_update;
@@ -1004,10 +1003,10 @@ dynamic_monitor_open_response(intptr_t id, int chan_id, int creation_status)
     struct stream *s;
     int bytes;
 
-    LLOGLN(0, ("dynamic_monitor_open_response: chan_id %d creation_status 0x%8.8x", chan_id, creation_status));
+    LOG(LOG_LEVEL_INFO, "dynamic_monitor_open_response: chan_id %d creation_status 0x%8.8x", chan_id, creation_status);
     if (creation_status != 0)
     {
-        LLOGLN(0, ("dynamic_monitor_open_response: error"));
+        LOG(LOG_LEVEL_INFO, "dynamic_monitor_open_response: error");
         return 1;
     }
     pro = (struct xrdp_process *) id;
@@ -1030,7 +1029,7 @@ dynamic_monitor_open_response(intptr_t id, int chan_id, int creation_status)
 static int
 dynamic_monitor_close_response(intptr_t id, int chan_id)
 {
-    LLOGLN(0, ("dynamic_monitor_close_response:"));
+    LOG(LOG_LEVEL_INFO, "dynamic_monitor_close_response:");
     return 0;
 }
 
@@ -1039,7 +1038,7 @@ static int
 dynamic_monitor_data_first(intptr_t id, int chan_id, char *data, int bytes,
                            int total_bytes)
 {
-    LLOGLN(0, ("dynamic_monitor_data_first:"));
+    LOG(LOG_LEVEL_INFO, "dynamic_monitor_data_first:");
     return 0;
 }
 
@@ -1073,7 +1072,7 @@ dynamic_monitor_data(intptr_t id, int chan_id, char *data, int bytes)
     int session_width;
     int session_height;
 
-    LLOGLN(0, ("dynamic_monitor_data:"));
+    LOG(LOG_LEVEL_INFO, "dynamic_monitor_data:");
     pro = (struct xrdp_process *) id;
     wm = pro->wm;
     g_memset(&ls, 0, sizeof(ls));
@@ -1084,8 +1083,8 @@ dynamic_monitor_data(intptr_t id, int chan_id, char *data, int bytes)
     s = &ls;
     in_uint32_le(s, msg_type);
     in_uint32_le(s, msg_length);
-    LLOGLN(0, ("dynamic_monitor_data: msg_type %d msg_length %d",
-           msg_type, msg_length));
+    LOG(LOG_LEVEL_INFO, "dynamic_monitor_data: msg_type %d msg_length %d",
+           msg_type, msg_length);
 
     rect.left = 8192;
     rect.top = 8192;
@@ -1096,8 +1095,8 @@ dynamic_monitor_data(intptr_t id, int chan_id, char *data, int bytes)
     {
         in_uint32_le(s, MonitorLayoutSize);
         in_uint32_le(s, NumMonitor);
-        LLOGLN(0, ("  MonitorLayoutSize %d NumMonitor %d",
-               MonitorLayoutSize, NumMonitor));
+        LOG(LOG_LEVEL_INFO, "  MonitorLayoutSize %d NumMonitor %d",
+               MonitorLayoutSize, NumMonitor);
         for (monitor_index = 0; monitor_index < NumMonitor; monitor_index++)
         {
             in_uint32_le(s, Flags);
@@ -1110,12 +1109,12 @@ dynamic_monitor_data(intptr_t id, int chan_id, char *data, int bytes)
             in_uint32_le(s, Orientation);
             in_uint32_le(s, DesktopScaleFactor);
             in_uint32_le(s, DeviceScaleFactor);
-            LLOGLN(0, ("    Flags 0x%8.8x Left %d Top %d "
+            LOG(LOG_LEVEL_INFO, "    Flags 0x%8.8x Left %d Top %d "
                    "Width %d Height %d PhysicalWidth %d PhysicalHeight %d "
                    "Orientation %d DesktopScaleFactor %d DeviceScaleFactor %d",
                    Flags, Left, Top, Width, Height,
                    PhysicalWidth, PhysicalHeight, Orientation,
-                   DesktopScaleFactor, DeviceScaleFactor));
+                   DesktopScaleFactor, DeviceScaleFactor);
 
             rect.left = MIN(Left, rect.left);
             rect.top = MIN(Top, rect.top);
@@ -1139,6 +1138,9 @@ dynamic_monitor_data(intptr_t id, int chan_id, char *data, int bytes)
         xrdp_wm_load_static_pointers(wm);
         /* redraw */
         xrdp_bitmap_invalidate(wm->screen, 0);
+
+        /////////////////////THIS IS WHERE WE NEED TO SEND THE XORG MESSAGE
+
     }
     return 0;
 }
