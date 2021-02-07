@@ -428,7 +428,6 @@ xrdp_mm_setup_mod1(struct xrdp_mm *self)
 
         if (self->mod != 0)
         {
-            /////////////POSSIBLE PLACE WHERE I NEED TO ADD MONITOR RESIZE FUNCTION
             self->mod->wm = (long)(self->wm);
             self->mod->server_begin_update = server_begin_update;
             self->mod->server_end_update = server_end_update;
@@ -1140,7 +1139,11 @@ dynamic_monitor_data(intptr_t id, int chan_id, char *data, int bytes)
         xrdp_bitmap_invalidate(wm->screen, 0);
 
         /////////////////////THIS IS WHERE WE NEED TO SEND THE XORG MESSAGE
-
+        struct xrdp_mod* v = wm->mm->mod;
+        if (wm->mm->mod != 0) {
+            v->mod_server_monitor_resize(v, session_width, session_height, wm->screen->bpp);
+            v->mod_server_monitor_full_invalidate(v, session_width, session_height);
+        }
     }
     return 0;
 }

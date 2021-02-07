@@ -522,4 +522,3 @@ server_add_char_alpha(struct xrdp_mod* mod, int font, int character,
                       int width, int height, char* data);
 int
 server_session_info(struct xrdp_mod *mod, const char *data, int data_bytes);
-

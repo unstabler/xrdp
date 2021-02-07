@@ -34,10 +34,13 @@
     do { if (_level < LOG_LEVEL) { g_writeln _args ; } } while (0)
 
 static int
-lib_mod_process_message(struct mod *mod, struct stream *s);
+send_server_monitor_resize(struct mod *mod, struct stream *s, int width, int height, int bpp);
 
 static int
-send_server_monitor_resize(struct mod *mod, struct stream *s);
+send_server_monitor_full_invalidate(struct mod *mod, struct stream *s, int width, int height);
+
+static int
+lib_mod_process_message(struct mod *mod, struct stream *s);
 
 /******************************************************************************/
 static int
@@ -273,29 +276,12 @@ lib_mod_connect(struct mod *mod)
     if (error == 0)
     {
         /* send screen size message */
-        send_server_monitor_resize(mod, s);
+        error = send_server_monitor_resize(mod, s, mod->width, mod->height, mod->bpp);
     }
 
     if (error == 0)
     {
-        /* send invalidate message */
-        init_stream(s, 8192);
-        s_push_layer(s, iso_hdr, 4);
-        out_uint16_le(s, 103);
-        out_uint32_le(s, 200);
-        /* x and y */
-        i = 0;
-        out_uint32_le(s, i);
-        /* width and height */
-        i = ((mod->width & 0xffff) << 16) | mod->height;
-        out_uint32_le(s, i);
-        out_uint32_le(s, 0);
-        out_uint32_le(s, 0);
-        s_mark_end(s);
-        len = (int)(s->end - s->data);
-        s_pop_layer(s, iso_hdr);
-        out_uint32_le(s, len);
-        lib_send_copy(mod, s);
+        error = send_server_monitor_full_invalidate(mod, s, mod->width, mod->height);
     }
 
     free_stream(s);
@@ -1295,22 +1281,70 @@ process_server_paint_rect_shmem_ex(struct mod *amod, struct stream *s)
 /******************************************************************************/
 /* return error */
 static int
-send_server_monitor_resize(struct mod *mod, struct stream *s)
+send_server_monitor_resize(struct mod *mod, struct stream *s, int width, int height, int bpp)
 {
     /* send screen size message */
     init_stream(s, 8192);
     s_push_layer(s, iso_hdr, 4);
     out_uint16_le(s, 103);
     out_uint32_le(s, 300);
-    out_uint32_le(s, mod->width);
-    out_uint32_le(s, mod->height);
-    out_uint32_le(s, mod->bpp);
+    out_uint32_le(s, width);
+    out_uint32_le(s, height);
+    out_uint32_le(s, bpp);
     out_uint32_le(s, 0);
     s_mark_end(s);
     int len = (int)(s->end - s->data);
     s_pop_layer(s, iso_hdr);
     out_uint32_le(s, len);
     int rv = lib_send_copy(mod, s);
+    return rv;
+}
+
+static int
+send_server_monitor_full_invalidate(struct mod *mod, struct stream *s, int width, int height)
+{
+    /* send invalidate message */
+    init_stream(s, 8192);
+    s_push_layer(s, iso_hdr, 4);
+    out_uint16_le(s, 103);
+    out_uint32_le(s, 200);
+    /* x and y */
+    int i = 0;
+    out_uint32_le(s, i);
+    /* width and height */
+    i = ((width & 0xffff) << 16) | height;
+    out_uint32_le(s, i);
+    out_uint32_le(s, 0);
+    out_uint32_le(s, 0);
+    s_mark_end(s);
+    int len = (int)(s->end - s->data);
+    s_pop_layer(s, iso_hdr);
+    out_uint32_le(s, len);
+    int rv = lib_send_copy(mod, s);
+    return rv;
+}
+
+/******************************************************************************/
+/* return error */
+static int
+lib_send_server_monitor_resize(struct mod *mod, int width, int height, int bpp)
+{
+    /* send screen size message */
+    struct stream *s;
+    make_stream(s);
+    int rv = send_server_monitor_resize(mod, s, width, height, bpp);
+    return rv;
+}
+
+/******************************************************************************/
+/* return error */
+static int
+lib_send_server_monitor_full_invalidate(struct mod *mod, int width, int height)
+{
+    /* send screen size message */
+    struct stream *s;
+    make_stream(s);
+    int rv = send_server_monitor_full_invalidate(mod, s, width, height);
     return rv;
 }
 
@@ -1658,6 +1692,8 @@ mod_init(void)
     mod->mod_check_wait_objs = lib_mod_check_wait_objs;
     mod->mod_frame_ack = lib_mod_frame_ack;
     mod->mod_suppress_output = lib_mod_suppress_output;
+    mod->mod_server_monitor_resize = lib_send_server_monitor_resize;
+    mod->mod_server_monitor_full_invalidate = lib_send_server_monitor_full_invalidate;
     return (tintptr) mod;
 }
 
