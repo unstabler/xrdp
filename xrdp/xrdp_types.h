@@ -57,7 +57,8 @@ struct xrdp_mod
                              int width, int height, int bpp);
   int (*mod_server_monitor_full_invalidate)(struct xrdp_mod* v,
                              int width, int height);
-  tintptr mod_dumby[100 - 13]; /* align, 100 minus the number of mod
+  int (*mod_server_version_message)(struct xrdp_mod* v);
+  tintptr mod_dumby[100 - 14]; /* align, 100 minus the number of mod
                                   functions above */
   /* server functions */
   int (*server_begin_update)(struct xrdp_mod* v);

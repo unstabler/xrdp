@@ -1126,6 +1126,7 @@ dynamic_monitor_data(intptr_t id, int chan_id, char *data, int bytes)
     session_height = rect.bottom - rect.top;
     if ((session_width > 0) && (session_height > 0))
     {
+        // TODO: Unify this logic with server_reset
         libxrdp_reset(wm->session, session_width, session_height, 32);
         /* reset cache */
         xrdp_cache_reset(wm->cache, wm->client_info);
@@ -1140,7 +1141,8 @@ dynamic_monitor_data(intptr_t id, int chan_id, char *data, int bytes)
 
         /////////////////////THIS IS WHERE WE NEED TO SEND THE XORG MESSAGE
         struct xrdp_mod* v = wm->mm->mod;
-        if (wm->mm->mod != 0) {
+        if (v != 0) {
+            v->mod_server_version_message(v);
             v->mod_server_monitor_resize(v, session_width, session_height, wm->screen->bpp);
             v->mod_server_monitor_full_invalidate(v, session_width, session_height);
         }
