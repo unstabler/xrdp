@@ -25,7 +25,7 @@
 #include "log.h"
 #include "string_calls.h"
 
-#ifndef USE_NOPAM
+#ifdef USE_PAM
 #if defined(HAVE__PAM_TYPES_H)
 #define LINUXPAM 1
 #include <security/_pam_types.h>
@@ -33,20 +33,11 @@
 #define OPENPAM 1
 #include <security/pam_constants.h>
 #endif
-#endif /* USE_NOPAM */
+#endif /* USE_PAM */
 
 #include "xrdp_encoder.h"
 #include "xrdp_sockets.h"
 
-#define LLOG_LEVEL 6
-#define LLOGLN(_level, _args) \
-  { \
-    if (_level < LLOG_LEVEL) \
-    { \
-        g_write("xrdp:xrdp_mm [%10.10u]: ", g_time3()); \
-        g_writeln _args ; \
-    } \
-  }
 
 /*****************************************************************************/
 struct xrdp_mm *
@@ -61,15 +52,15 @@ xrdp_mm_create(struct xrdp_wm *owner)
     self->login_values = list_create();
     self->login_values->auto_free = 1;
 
-    LLOGLN(0, ("xrdp_mm_create: bpp %d mcs_connection_type %d "
-           "jpeg_codec_id %d v3_codec_id %d rfx_codec_id %d "
-           "h264_codec_id %d",
-           self->wm->client_info->bpp,
-           self->wm->client_info->mcs_connection_type,
-           self->wm->client_info->jpeg_codec_id,
-           self->wm->client_info->v3_codec_id,
-           self->wm->client_info->rfx_codec_id,
-           self->wm->client_info->h264_codec_id));
+    LOG_DEVEL(LOG_LEVEL_INFO, "xrdp_mm_create: bpp %d mcs_connection_type %d "
+              "jpeg_codec_id %d v3_codec_id %d rfx_codec_id %d "
+              "h264_codec_id %d",
+              self->wm->client_info->bpp,
+              self->wm->client_info->mcs_connection_type,
+              self->wm->client_info->jpeg_codec_id,
+              self->wm->client_info->v3_codec_id,
+              self->wm->client_info->rfx_codec_id,
+              self->wm->client_info->h264_codec_id);
 
     self->encoder = xrdp_encoder_create(self);
 
@@ -101,7 +92,7 @@ xrdp_mm_sync_load(long param1, long param2)
 static void
 xrdp_mm_module_cleanup(struct xrdp_mm *self)
 {
-    log_message(LOG_LEVEL_DEBUG, "xrdp_mm_module_cleanup");
+    LOG(LOG_LEVEL_DEBUG, "xrdp_mm_module_cleanup");
 
     if (self->mod != 0)
     {
@@ -130,7 +121,7 @@ xrdp_mm_module_cleanup(struct xrdp_mm *self)
     {
         /* make sure autologin is off */
         self->wm->session->client_info->rdp_autologin = 0;
-        xrdp_wm_set_login_mode(self->wm, 0); /* reset session */
+        xrdp_wm_set_login_state(self->wm, WMLS_RESET); /* reset session */
     }
 
 }
@@ -244,7 +235,7 @@ xrdp_mm_send_login(struct xrdp_mm *self)
     out_uint16_be(s, xserverbpp);
 
     /* send domain */
-    if(self->wm->client_info->domain[0]!='_')
+    if (self->wm->client_info->domain[0] != '_')
     {
         index = g_strlen(self->wm->client_info->domain);
         out_uint16_be(s, index);
@@ -408,13 +399,13 @@ xrdp_mm_setup_mod1(struct xrdp_mm *self)
 
                 if (self->mod != 0)
                 {
-                    g_writeln("loaded module '%s' ok, interface size %d, version %d", lib,
-                              self->mod->size, self->mod->version);
+                    LOG(LOG_LEVEL_INFO, "loaded module '%s' ok, interface size %d, version %d", lib,
+                        self->mod->size, self->mod->version);
                 }
             }
             else
             {
-                log_message(LOG_LEVEL_ERROR,"no mod_init or mod_exit address found");
+                LOG(LOG_LEVEL_ERROR, "no mod_init or mod_exit address found");
             }
         }
         else
@@ -480,7 +471,7 @@ xrdp_mm_setup_mod1(struct xrdp_mm *self)
     /* id self->mod is null, there must be a problem */
     if (self->mod == 0)
     {
-        DEBUG(("problem loading lib in xrdp_mm_setup_mod1"));
+        LOG(LOG_LEVEL_ERROR, "problem loading lib in xrdp_mm_setup_mod1");
         return 1;
     }
 
@@ -636,7 +627,10 @@ xrdp_mm_setup_mod2(struct xrdp_mm *self, tui8 *guid)
 static int
 xrdp_mm_trans_send_channel_setup(struct xrdp_mm *self, struct trans *trans)
 {
-    int index;
+    int chan_count;
+    /* This value should be the same as chan_count, but we need to
+     * cater for a possible failure of libxrdp_query_channel() */
+    int output_chan_count;
     int chan_id;
     int chan_flags;
     int size;
@@ -655,21 +649,24 @@ xrdp_mm_trans_send_channel_setup(struct xrdp_mm *self, struct trans *trans)
     s_push_layer(s, iso_hdr, 8);
     s_push_layer(s, mcs_hdr, 8);
     s_push_layer(s, sec_hdr, 2);
-    index = 0;
 
-    while (libxrdp_query_channel(self->wm->session, index, chan_name,
-                                 &chan_flags) == 0)
+    chan_count = libxrdp_get_channel_count(self->wm->session);
+    output_chan_count = 0;
+    for (chan_id = 0 ; chan_id < chan_count; ++chan_id)
     {
-        chan_id = libxrdp_get_channel_id(self->wm->session, chan_name);
-        out_uint8a(s, chan_name, 8);
-        out_uint16_le(s, chan_id);
-        out_uint16_le(s, chan_flags);
-        index++;
+        if (libxrdp_query_channel(self->wm->session, chan_id, chan_name,
+                                  &chan_flags) == 0)
+        {
+            out_uint8a(s, chan_name, 8);
+            out_uint16_le(s, chan_id);
+            out_uint16_le(s, chan_flags);
+            ++output_chan_count;
+        }
     }
 
     s_mark_end(s);
     s_pop_layer(s, sec_hdr);
-    out_uint16_le(s, index);
+    out_uint16_le(s, output_chan_count);
     s_pop_layer(s, mcs_hdr);
     size = (int)(s->end - s->p);
     out_uint32_le(s, 3); /* msg id */
@@ -712,7 +709,7 @@ xrdp_mm_trans_process_channel_data(struct xrdp_mm *self, struct stream *s)
 /* returns error
    process rail create window order */
 static int
-xrdp_mm_process_rail_create_window(struct xrdp_mm* self, struct stream* s)
+xrdp_mm_process_rail_create_window(struct xrdp_mm *self, struct stream *s)
 {
     int flags;
     int window_id;
@@ -725,7 +722,7 @@ xrdp_mm_process_rail_create_window(struct xrdp_mm* self, struct stream* s)
     g_memset(&rwso, 0, sizeof(rwso));
     in_uint32_le(s, window_id);
 
-    g_writeln("xrdp_mm_process_rail_create_window: 0x%8.8x", window_id);
+    LOG(LOG_LEVEL_DEBUG, "xrdp_mm_process_rail_create_window: 0x%8.8x", window_id);
 
     in_uint32_le(s, rwso.owner_window_id);
     in_uint32_le(s, rwso.style);
@@ -754,7 +751,7 @@ xrdp_mm_process_rail_create_window(struct xrdp_mm* self, struct stream* s)
     if (rwso.num_window_rects > 0)
     {
         bytes = sizeof(struct rail_window_rect) * rwso.num_window_rects;
-        rwso.window_rects = (struct rail_window_rect*)g_malloc(bytes, 0);
+        rwso.window_rects = (struct rail_window_rect *)g_malloc(bytes, 0);
         for (index = 0; index < rwso.num_window_rects; index++)
         {
             in_uint16_le(s, rwso.window_rects[index].left);
@@ -769,7 +766,7 @@ xrdp_mm_process_rail_create_window(struct xrdp_mm* self, struct stream* s)
     if (rwso.num_visibility_rects > 0)
     {
         bytes = sizeof(struct rail_window_rect) * rwso.num_visibility_rects;
-        rwso.visibility_rects = (struct rail_window_rect*)g_malloc(bytes, 0);
+        rwso.visibility_rects = (struct rail_window_rect *)g_malloc(bytes, 0);
         for (index = 0; index < rwso.num_visibility_rects; index++)
         {
             in_uint16_le(s, rwso.visibility_rects[index].left);
@@ -799,7 +796,7 @@ xrdp_mm_process_rail_create_window(struct xrdp_mm* self, struct stream* s)
 /* returns error
    process rail configure window order */
 static int
-xrdp_mm_process_rail_configure_window(struct xrdp_mm* self, struct stream* s)
+xrdp_mm_process_rail_configure_window(struct xrdp_mm *self, struct stream *s)
 {
     int flags;
     int window_id;
@@ -811,7 +808,7 @@ xrdp_mm_process_rail_configure_window(struct xrdp_mm* self, struct stream* s)
     g_memset(&rwso, 0, sizeof(rwso));
     in_uint32_le(s, window_id);
 
-    g_writeln("xrdp_mm_process_rail_configure_window: 0x%8.8x", window_id);
+    LOG(LOG_LEVEL_DEBUG, "xrdp_mm_process_rail_configure_window: 0x%8.8x", window_id);
 
     in_uint32_le(s, rwso.client_offset_x);
     in_uint32_le(s, rwso.client_offset_y);
@@ -829,7 +826,7 @@ xrdp_mm_process_rail_configure_window(struct xrdp_mm* self, struct stream* s)
     if (rwso.num_window_rects > 0)
     {
         bytes = sizeof(struct rail_window_rect) * rwso.num_window_rects;
-        rwso.window_rects = (struct rail_window_rect*)g_malloc(bytes, 0);
+        rwso.window_rects = (struct rail_window_rect *)g_malloc(bytes, 0);
         for (index = 0; index < rwso.num_window_rects; index++)
         {
             in_uint16_le(s, rwso.window_rects[index].left);
@@ -844,7 +841,7 @@ xrdp_mm_process_rail_configure_window(struct xrdp_mm* self, struct stream* s)
     if (rwso.num_visibility_rects > 0)
     {
         bytes = sizeof(struct rail_window_rect) * rwso.num_visibility_rects;
-        rwso.visibility_rects = (struct rail_window_rect*)g_malloc(bytes, 0);
+        rwso.visibility_rects = (struct rail_window_rect *)g_malloc(bytes, 0);
         for (index = 0; index < rwso.num_visibility_rects; index++)
         {
             in_uint16_le(s, rwso.visibility_rects[index].left);
@@ -873,13 +870,13 @@ xrdp_mm_process_rail_configure_window(struct xrdp_mm* self, struct stream* s)
 /* returns error
    process rail destroy window order */
 static int
-xrdp_mm_process_rail_destroy_window(struct xrdp_mm* self, struct stream* s)
+xrdp_mm_process_rail_destroy_window(struct xrdp_mm *self, struct stream *s)
 {
     int window_id;
     int rv;
 
     in_uint32_le(s, window_id);
-    g_writeln("xrdp_mm_process_rail_destroy_window 0x%8.8x", window_id);
+    LOG(LOG_LEVEL_DEBUG, "xrdp_mm_process_rail_destroy_window 0x%8.8x", window_id);
     rv = libxrdp_orders_init(self->wm->session);
     if (rv == 0)
     {
@@ -896,7 +893,7 @@ xrdp_mm_process_rail_destroy_window(struct xrdp_mm* self, struct stream* s)
 /* returns error
    process rail update window (show state) order */
 static int
-xrdp_mm_process_rail_show_window(struct xrdp_mm* self, struct stream* s)
+xrdp_mm_process_rail_show_window(struct xrdp_mm *self, struct stream *s)
 {
     int window_id;
     int rv;
@@ -907,8 +904,8 @@ xrdp_mm_process_rail_show_window(struct xrdp_mm* self, struct stream* s)
     in_uint32_le(s, window_id);
     in_uint32_le(s, flags);
     in_uint32_le(s, rwso.show_state);
-    g_writeln("xrdp_mm_process_rail_show_window 0x%8.8x %x", window_id,
-              rwso.show_state);
+    LOG(LOG_LEVEL_DEBUG, "xrdp_mm_process_rail_show_window 0x%8.8x %x", window_id,
+        rwso.show_state);
     rv = libxrdp_orders_init(self->wm->session);
     if (rv == 0)
     {
@@ -925,7 +922,7 @@ xrdp_mm_process_rail_show_window(struct xrdp_mm* self, struct stream* s)
 /* returns error
    process rail update window (title) order */
 static int
-xrdp_mm_process_rail_update_window_text(struct xrdp_mm* self, struct stream* s)
+xrdp_mm_process_rail_update_window_text(struct xrdp_mm *self, struct stream *s)
 {
     int size;
     int flags;
@@ -933,17 +930,17 @@ xrdp_mm_process_rail_update_window_text(struct xrdp_mm* self, struct stream* s)
     int window_id;
     struct rail_window_state_order rwso;
 
-    g_writeln("xrdp_mm_process_rail_update_window_text:");
+    LOG(LOG_LEVEL_DEBUG, "xrdp_mm_process_rail_update_window_text:");
     in_uint32_le(s, window_id);
     in_uint32_le(s, flags);
-    g_writeln("  update window title info: 0x%8.8x", window_id);
+    LOG(LOG_LEVEL_DEBUG, "  update window title info: 0x%8.8x", window_id);
 
     g_memset(&rwso, 0, sizeof(rwso));
     in_uint32_le(s, size); /* title size */
     rwso.title_info = g_new(char, size + 1);
     in_uint8a(s, rwso.title_info, size);
     rwso.title_info[size] = 0;
-    g_writeln("  set window title %s size %d 0x%8.8x", rwso.title_info, size, flags);
+    LOG(LOG_LEVEL_DEBUG, "  set window title %s size %d 0x%8.8x", rwso.title_info, size, flags);
     rv = libxrdp_orders_init(self->wm->session);
     if (rv == 0)
     {
@@ -953,7 +950,7 @@ xrdp_mm_process_rail_update_window_text(struct xrdp_mm* self, struct stream* s)
     {
         rv = libxrdp_orders_send(self->wm->session);
     }
-    g_writeln("  set window title %s %d", rwso.title_info, rv);
+    LOG(LOG_LEVEL_DEBUG, "  set window title %s %d", rwso.title_info, rv);
 
     g_free(rwso.title_info);
 
@@ -964,7 +961,7 @@ xrdp_mm_process_rail_update_window_text(struct xrdp_mm* self, struct stream* s)
 /* returns error
    process alternate secondary drawing orders for rail channel */
 static int
-xrdp_mm_process_rail_drawing_orders(struct xrdp_mm* self, struct stream *s)
+xrdp_mm_process_rail_drawing_orders(struct xrdp_mm *self, struct stream *s)
 {
     int order_type;
     int rv;
@@ -972,7 +969,7 @@ xrdp_mm_process_rail_drawing_orders(struct xrdp_mm* self, struct stream *s)
     rv = 0;
     in_uint32_le(s, order_type);
 
-    switch(order_type)
+    switch (order_type)
     {
         case 2: /* create_window */
             xrdp_mm_process_rail_create_window(self, s);
@@ -1152,7 +1149,7 @@ dynamic_monitor_data(intptr_t id, int chan_id, char *data, int bytes)
 
 /******************************************************************************/
 int
-xrdp_mm_drdynvc_up(struct xrdp_mm* self)
+xrdp_mm_drdynvc_up(struct xrdp_mm *self)
 {
     struct xrdp_drdynvc_procs d_procs;
     int flags;
@@ -1179,12 +1176,12 @@ xrdp_mm_drdynvc_up(struct xrdp_mm* self)
 
 /******************************************************************************/
 int
-xrdp_mm_suppress_output(struct xrdp_mm* self, int suppress,
+xrdp_mm_suppress_output(struct xrdp_mm *self, int suppress,
                         int left, int top, int right, int bottom)
 {
-    LLOGLN(0, ("xrdp_mm_suppress_output: suppress %d "
-           "left %d top %d right %d bottom %d",
-           suppress, left, top, right, bottom));
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "xrdp_mm_suppress_output: suppress %d "
+              "left %d top %d right %d bottom %d",
+              suppress, left, top, right, bottom);
     if (self->mod != NULL)
     {
         if (self->mod->mod_suppress_output != NULL)
@@ -1203,12 +1200,12 @@ xrdp_mm_drdynvc_open_response(intptr_t id, int chan_id, int creation_status)
 {
     struct trans *trans;
     struct stream *s;
-    struct xrdp_wm* wm;
+    struct xrdp_wm *wm;
     struct xrdp_process *pro;
     int chansrv_chan_id;
 
-    LLOGLN(10, ("xrdp_mm_drdynvc_open_response: chan_id %d creation_status %d",
-           chan_id, creation_status));
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "xrdp_mm_drdynvc_open_response: chan_id %d creation_status %d",
+              chan_id, creation_status);
     pro = (struct xrdp_process *) id;
     wm = pro->wm;
     trans = wm->mm->chan_trans;
@@ -1235,7 +1232,7 @@ xrdp_mm_drdynvc_close_response(intptr_t id, int chan_id)
 {
     struct trans *trans;
     struct stream *s;
-    struct xrdp_wm* wm;
+    struct xrdp_wm *wm;
     struct xrdp_process *pro;
     int chansrv_chan_id;
 
@@ -1265,7 +1262,7 @@ xrdp_mm_drdynvc_data_first(intptr_t id, int chan_id, char *data,
 {
     struct trans *trans;
     struct stream *s;
-    struct xrdp_wm* wm;
+    struct xrdp_wm *wm;
     struct xrdp_process *pro;
     int chansrv_chan_id;
 
@@ -1297,7 +1294,7 @@ xrdp_mm_drdynvc_data(intptr_t id, int chan_id, char *data, int bytes)
 {
     struct trans *trans;
     struct stream *s;
-    struct xrdp_wm* wm;
+    struct xrdp_wm *wm;
     struct xrdp_process *pro;
     int chansrv_chan_id;
 
@@ -1324,8 +1321,8 @@ xrdp_mm_drdynvc_data(intptr_t id, int chan_id, char *data, int bytes)
 /*****************************************************************************/
 /* open message from channel server going to client */
 static int
-xrdp_mm_trans_process_drdynvc_channel_open(struct xrdp_mm* self,
-                                           struct stream *s)
+xrdp_mm_trans_process_drdynvc_channel_open(struct xrdp_mm *self,
+        struct stream *s)
 {
     int name_bytes;
     int flags;
@@ -1395,8 +1392,8 @@ xrdp_mm_trans_process_drdynvc_channel_open(struct xrdp_mm* self,
 /*****************************************************************************/
 /* close message from channel server going to client */
 static int
-xrdp_mm_trans_process_drdynvc_channel_close(struct xrdp_mm* self,
-                                            struct stream *s)
+xrdp_mm_trans_process_drdynvc_channel_close(struct xrdp_mm *self,
+        struct stream *s)
 {
     int chansrv_chan_id;
     int chan_id;
@@ -1420,8 +1417,8 @@ xrdp_mm_trans_process_drdynvc_channel_close(struct xrdp_mm* self,
 /*****************************************************************************/
 /* data from channel server going to client */
 static int
-xrdp_mm_trans_process_drdynvc_data_first(struct xrdp_mm* self,
-                                         struct stream *s)
+xrdp_mm_trans_process_drdynvc_data_first(struct xrdp_mm *self,
+        struct stream *s)
 {
     int chansrv_chan_id;
     int chan_id;
@@ -1455,7 +1452,7 @@ xrdp_mm_trans_process_drdynvc_data_first(struct xrdp_mm* self,
 /*****************************************************************************/
 /* data from channel server going to client */
 static int
-xrdp_mm_trans_process_drdynvc_data(struct xrdp_mm* self,
+xrdp_mm_trans_process_drdynvc_data(struct xrdp_mm *self,
                                    struct stream *s)
 {
     int chansrv_chan_id;
@@ -1515,7 +1512,7 @@ xrdp_mm_chan_process_msg(struct xrdp_mm *self, struct trans *trans,
         next_msg += size;
         s_end = s->end;
         s->end = next_msg;
-        LLOGLN(10, ("xrdp_mm_chan_process_msg: got msg id %d", id));
+        LOG_DEVEL(LOG_LEVEL_DEBUG, "xrdp_mm_chan_process_msg: got msg id %d", id);
         switch (id)
         {
             case 8: /* channel data */
@@ -1537,13 +1534,13 @@ xrdp_mm_chan_process_msg(struct xrdp_mm *self, struct trans *trans,
                 rv = xrdp_mm_trans_process_drdynvc_data(self, s);
                 break;
             default:
-                log_message(LOG_LEVEL_ERROR,"xrdp_mm_chan_process_msg: unknown id %d", id);
+                LOG(LOG_LEVEL_ERROR, "xrdp_mm_chan_process_msg: unknown id %d", id);
                 break;
         }
         s->end = s_end;
         if (rv != 0)
         {
-            LLOGLN(0, ("xrdp_mm_chan_process_msg: error rv %d id %d", rv, id));
+            LOG(LOG_LEVEL_ERROR, "xrdp_mm_chan_process_msg: error rv %d id %d", rv, id);
             rv = 0;
         }
 
@@ -1581,7 +1578,7 @@ xrdp_mm_chan_data_in(struct trans *trans)
     {
         in_uint8s(s, 4); /* id */
         in_uint32_le(s, size);
-        LLOGLN(10, ("xrdp_mm_chan_data_in: got header, size %d", size));
+        LOG_DEVEL(LOG_LEVEL_DEBUG, "xrdp_mm_chan_data_in: got header, size %d", size);
         if (size > 8)
         {
             self->chan_trans->header_size = size;
@@ -1594,8 +1591,8 @@ xrdp_mm_chan_data_in(struct trans *trans)
     self->chan_trans->header_size = 8;
     trans->extra_flags = 0;
     init_stream(s, 0);
-    LLOGLN(10, ("xrdp_mm_chan_data_in: got whole message, reset for "
-           "next header"));
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "xrdp_mm_chan_data_in: got whole message, reset for "
+              "next header");
     return error;
 }
 
@@ -1610,9 +1607,9 @@ xrdp_mm_connect_chansrv(struct xrdp_mm *self, const char *ip, const char *port)
 
     if (self->wm->client_info->channels_allowed == 0)
     {
-        log_message(LOG_LEVEL_DEBUG, "%s: "
-                    "skip connecting to chansrv because all channels are disabled",
-                    __func__);
+        LOG(LOG_LEVEL_DEBUG, "%s: "
+            "skip connecting to chansrv because all channels are disabled",
+            __func__);
         return 0;
     }
 
@@ -1650,27 +1647,27 @@ xrdp_mm_connect_chansrv(struct xrdp_mm *self, const char *ip, const char *port)
             break;
         }
         g_sleep(1000);
-        log_message(LOG_LEVEL_ERROR,"xrdp_mm_connect_chansrv: connect failed "
-                  "trying again...");
+        LOG(LOG_LEVEL_WARNING, "xrdp_mm_connect_chansrv: connect failed "
+            "trying again...");
     }
 
     if (!(self->chan_trans_up))
     {
-        log_message(LOG_LEVEL_ERROR,"xrdp_mm_connect_chansrv: error in "
-                    "trans_connect chan");
+        LOG(LOG_LEVEL_ERROR, "xrdp_mm_connect_chansrv: error in "
+            "trans_connect chan");
     }
 
     if (self->chan_trans_up)
     {
         if (xrdp_mm_trans_send_channel_setup(self, self->chan_trans) != 0)
         {
-            log_message(LOG_LEVEL_ERROR,"xrdp_mm_connect_chansrv: error in "
-                      "xrdp_mm_trans_send_channel_setup");
+            LOG(LOG_LEVEL_ERROR, "xrdp_mm_connect_chansrv: error in "
+                "xrdp_mm_trans_send_channel_setup");
         }
         else
         {
-            log_message(LOG_LEVEL_DEBUG,"xrdp_mm_connect_chansrv: chansrv "
-                        "connect successful");
+            LOG(LOG_LEVEL_DEBUG, "xrdp_mm_connect_chansrv: chansrv "
+                "connect successful");
         }
     }
 
@@ -1682,9 +1679,9 @@ static void cleanup_sesman_connection(struct xrdp_mm *self)
     self->delete_sesman_trans = 1;
     self->connected_state = 0;
 
-    if (self->wm->login_mode != 10)
+    if (self->wm->login_state != WMLS_CLEANUP)
     {
-        xrdp_wm_set_login_mode(self->wm, 11);
+        xrdp_wm_set_login_state(self->wm, WMLS_INACTIVE);
         xrdp_mm_module_cleanup(self);
     }
 }
@@ -1717,13 +1714,13 @@ xrdp_mm_update_allowed_channels(struct xrdp_mm *self)
             libxrdp_disable_channel(session, chan_id, disabled);
             if (disabled)
             {
-                g_writeln("xrdp_mm_update_allowed_channels: channel %s "
-                          "channel id %d is disabled", chan_name, chan_id);
+                LOG(LOG_LEVEL_INFO, "xrdp_mm_update_allowed_channels: channel %s "
+                    "channel id %d is disabled", chan_name, chan_id);
             }
             else
             {
-                g_writeln("xrdp_mm_update_allowed_channels: channel %s "
-                          "channel id %d is allowed", chan_name, chan_id);
+                LOG(LOG_LEVEL_INFO, "xrdp_mm_update_allowed_channels: channel %s "
+                    "channel id %d is allowed", chan_name, chan_id);
             }
         }
     }
@@ -1742,7 +1739,7 @@ xrdp_mm_process_login_response(struct xrdp_mm *self, struct stream *s)
     char ip[256];
     char port[256];
     tui8 guid[16];
-    tui8* pguid;
+    tui8 *pguid;
 
     rv = 0;
     in_uint16_be(s, ok);
@@ -1764,7 +1761,7 @@ xrdp_mm_process_login_response(struct xrdp_mm *self, struct stream *s)
             if (xrdp_mm_setup_mod2(self, pguid) == 0)
             {
                 xrdp_mm_get_value(self, "ip", ip, 255);
-                xrdp_wm_set_login_mode(self->wm, 10);
+                xrdp_wm_set_login_state(self->wm, WMLS_CLEANUP);
                 self->wm->dragging = 0;
 
                 /* connect channel redir */
@@ -1885,7 +1882,7 @@ xrdp_mm_process_channel_data(struct xrdp_mm *self, tbus param1, tbus param2,
 
             if (total_length < length)
             {
-                log_message(LOG_LEVEL_DEBUG,"WARNING in xrdp_mm_process_channel_data(): total_len < length");
+                LOG(LOG_LEVEL_WARNING, "WARNING in xrdp_mm_process_channel_data(): total_len < length");
                 total_length = length;
             }
 
@@ -1941,7 +1938,7 @@ xrdp_mm_sesman_data_in(struct trans *trans)
 
         switch (code)
         {
-                /* even when the request is denied the reply will hold 3 as the command. */
+            /* even when the request is denied the reply will hold 3 as the command. */
             case 3:
                 error = xrdp_mm_process_login_response(self, s);
                 break;
@@ -1957,14 +1954,14 @@ xrdp_mm_sesman_data_in(struct trans *trans)
     return error;
 }
 
-#ifndef USE_NOPAM
+#ifdef USE_PAM
 /*********************************************************************/
 /* return 0 on success */
 static int
 access_control(char *username, char *password, char *srv)
 {
     int reply;
-    int rec = 32+1; /* 32 is reserved for PAM failures this means connect failure */
+    int rec = 32 + 1; /* 32 is reserved for PAM failures this means connect failure */
     struct stream *in_s;
     struct stream *out_s;
     unsigned long version;
@@ -2002,7 +1999,7 @@ access_control(char *username, char *password, char *srv)
             out_uint32_be(out_s, 0); /* version */
             index = (int)(out_s->end - out_s->data);
             out_uint32_be(out_s, index); /* size */
-            /* g_writeln("Number of data to send : %d",index); */
+            LOG(LOG_LEVEL_DEBUG, "Number of data to send : %d", index);
             reply = g_tcp_send(socket, out_s->data, index, 0);
             free_stream(out_s);
 
@@ -2017,7 +2014,7 @@ access_control(char *username, char *password, char *srv)
                     {
                         in_s->end =  in_s->end + reply;
                         in_uint32_be(in_s, version);
-                        /*g_writeln("Version number in reply from sesman: %d",version) ; */
+                        LOG(LOG_LEVEL_INFO, "Version number in reply from sesman: %lu", version);
                         in_uint32_be(in_s, size);
 
                         if ((size == 14) && (version == 0))
@@ -2028,8 +2025,8 @@ access_control(char *username, char *password, char *srv)
 
                             if (code != 4) /*0x04 means SCP_GW_AUTHENTICATION*/
                             {
-                                log_message(LOG_LEVEL_ERROR, "Returned cmd code from "
-                                            "sesman is corrupt");
+                                LOG(LOG_LEVEL_ERROR, "Returned cmd code from "
+                                    "sesman is corrupt");
                             }
                             else
                             {
@@ -2038,23 +2035,23 @@ access_control(char *username, char *password, char *srv)
                         }
                         else
                         {
-                            log_message(LOG_LEVEL_ERROR, "Corrupt reply size or "
-                                        "version from sesman: %ld", size);
+                            LOG(LOG_LEVEL_ERROR, "Corrupt reply size or "
+                                "version from sesman: %ld", size);
                         }
                     }
                     else
                     {
-                        log_message(LOG_LEVEL_ERROR, "No data received from sesman");
+                        LOG(LOG_LEVEL_ERROR, "No data received from sesman");
                     }
                 }
                 else
                 {
-                    log_message(LOG_LEVEL_ERROR, "Timeout when waiting for sesman");
+                    LOG(LOG_LEVEL_ERROR, "Timeout when waiting for sesman");
                 }
             }
             else
             {
-                log_message(LOG_LEVEL_ERROR, "No success sending to sesman");
+                LOG(LOG_LEVEL_ERROR, "No success sending to sesman");
             }
 
             free_stream(in_s);
@@ -2062,16 +2059,18 @@ access_control(char *username, char *password, char *srv)
         }
         else
         {
-            log_message(LOG_LEVEL_ERROR, "Failure connecting to socket sesman");
+            LOG(LOG_LEVEL_ERROR, "Failure connecting to socket sesman");
         }
     }
     else
     {
-        log_message(LOG_LEVEL_ERROR, "Failure creating socket - for access control");
+        LOG(LOG_LEVEL_ERROR, "Failure creating socket - for access control");
     }
 
     if (socket != -1)
+    {
         g_tcp_close(socket);
+    }
 
     return rec;
 }
@@ -2100,7 +2099,7 @@ cleanup_states(struct xrdp_mm *self)
     }
 }
 
-#ifndef USE_NOPAM
+#ifdef USE_PAM
 static const char *
 getPAMError(const int pamError, char *text, int text_bytes)
 {
@@ -2351,7 +2350,7 @@ xrdp_mm_connect(struct xrdp_mm *self)
     char ip[256];
     char port[8];
     char chansrvport[256];
-#ifndef USE_NOPAM
+#ifdef USE_PAM
     int use_pam_auth = 0;
     char pam_auth_sessionIP[256];
     char pam_auth_password[256];
@@ -2389,7 +2388,7 @@ xrdp_mm_connect(struct xrdp_mm *self)
             }
         }
 
-#ifndef USE_NOPAM
+#ifdef USE_PAM
         else if (g_strcasecmp(name, "pamusername") == 0)
         {
             use_pam_auth = 1;
@@ -2419,7 +2418,7 @@ xrdp_mm_connect(struct xrdp_mm *self)
         }
     }
 
-#ifndef USE_NOPAM
+#ifdef USE_PAM
     if (use_pam_auth)
     {
         int reply;
@@ -2428,16 +2427,16 @@ xrdp_mm_connect(struct xrdp_mm *self)
         xrdp_wm_log_msg(self->wm, LOG_LEVEL_DEBUG,
                         "Please wait, we now perform access control...");
 
-        /* g_writeln("we use pam modules to check if we can approve this user"); */
+        LOG(LOG_LEVEL_DEBUG, "we use pam modules to check if we can approve this user");
         if (!g_strncmp(pam_auth_username, "same", 255))
         {
-            log_message(LOG_LEVEL_DEBUG, "pamusername copied from username - same: %s", username);
+            LOG(LOG_LEVEL_DEBUG, "pamusername copied from username - same: %s", username);
             g_strncpy(pam_auth_username, username, 255);
         }
 
         if (!g_strncmp(pam_auth_password, "same", 255))
         {
-            log_message(LOG_LEVEL_DEBUG, "pam_auth_password copied from username - same: %s", password);
+            LOG(LOG_LEVEL_DEBUG, "pam_auth_password copied from username - same: %s", password);
             g_strncpy(pam_auth_password, password, 255);
         }
 
@@ -2490,8 +2489,8 @@ xrdp_mm_connect(struct xrdp_mm *self)
                 break;
             }
             g_sleep(1000);
-            g_writeln("xrdp_mm_connect: connect failed "
-                      "trying again...");
+            LOG(LOG_LEVEL_INFO, "xrdp_mm_connect: connect failed "
+                "trying again...");
         }
 
         if (ok)
@@ -2518,7 +2517,7 @@ xrdp_mm_connect(struct xrdp_mm *self)
         {
             if (xrdp_mm_setup_mod2(self, 0) == 0)
             {
-                xrdp_wm_set_login_mode(self->wm, 10);
+                xrdp_wm_set_login_state(self->wm, WMLS_CLEANUP);
                 rv = 0; /*success*/
             }
             else
@@ -2531,25 +2530,25 @@ xrdp_mm_connect(struct xrdp_mm *self)
         }
         else
         {
-            log_message(LOG_LEVEL_ERROR,"Failure setting up module");
+            LOG(LOG_LEVEL_ERROR, "Failure setting up module");
         }
 
-        if (self->wm->login_mode != 10)
+        if (self->wm->login_state != WMLS_CLEANUP)
         {
-            xrdp_wm_set_login_mode(self->wm, 11);
+            xrdp_wm_set_login_state(self->wm, WMLS_INACTIVE);
             xrdp_mm_module_cleanup(self);
             rv = 1; /* failure */
         }
     }
 
-    if ((self->wm->login_mode == 10) && (self->sesman_controlled == 0) &&
+    if ((self->wm->login_state == WMLS_CLEANUP) && (self->sesman_controlled == 0) &&
             (self->usechansrv != 0))
     {
         /* if sesman controlled, this will connect later */
         xrdp_mm_connect_chansrv(self, "", chansrvport);
     }
 
-    log_message(LOG_LEVEL_DEBUG,"return value from xrdp_mm_connect %d", rv);
+    LOG(LOG_LEVEL_DEBUG, "return value from xrdp_mm_connect %d", rv);
 
     return rv;
 }
@@ -2640,12 +2639,12 @@ xrdp_mm_dump_jpeg(struct xrdp_mm *self, XRDP_ENC_DATA_DONE *enc_done)
     }
     if (ii != 0)
     {
-        g_file_write(ii, (char*)&header, sizeof(header));
+        g_file_write(ii, (char *)&header, sizeof(header));
         g_file_write(ii, enc_done->comp_pad_data +
                      enc_done->pad_bytes + 2 + pheader_bytes[0],
                      enc_done->comp_bytes - (2 + pheader_bytes[0]));
         jj++;
-        g_writeln("dumping jpeg index %d", jj);
+        LOG(LOG_LEVEL_INFO, "dumping jpeg index %d", jj);
     }
     return 0;
 }
@@ -2656,7 +2655,7 @@ xrdp_mm_dump_jpeg(struct xrdp_mm *self, XRDP_ENC_DATA_DONE *enc_done)
 int
 xrdp_mm_check_chan(struct xrdp_mm *self)
 {
-    //g_writeln("xrdp_mm_check_chan:");
+    LOG(LOG_LEVEL_TRACE, "xrdp_mm_check_chan:");
     if ((self->chan_trans != 0) && self->chan_trans_up)
     {
         if (trans_check_wait_objs(self->chan_trans) != 0)
@@ -2687,8 +2686,8 @@ xrdp_mm_update_module_frame_ack(struct xrdp_mm *self)
     {
         if (encoder->frame_id_server > encoder->frame_id_server_sent)
         {
-            LLOGLN(10, ("xrdp_mm_update_module_ack: frame_id_server %d",
-                   encoder->frame_id_server));
+            LOG_DEVEL(LOG_LEVEL_DEBUG, "xrdp_mm_update_module_ack: frame_id_server %d",
+                      encoder->frame_id_server);
             encoder->frame_id_server_sent = encoder->frame_id_server;
             self->mod->mod_frame_ack(self->mod, 0, encoder->frame_id_server);
         }
@@ -2717,8 +2716,8 @@ xrdp_mm_process_enc_done(struct xrdp_mm *self)
             break;
         }
         /* do something with msg */
-        LLOGLN(10, ("xrdp_mm_process_enc_done: message back bytes %d",
-               enc_done->comp_bytes));
+        LOG_DEVEL(LOG_LEVEL_DEBUG, "xrdp_mm_process_enc_done: message back bytes %d",
+                  enc_done->comp_bytes);
         x = enc_done->x;
         y = enc_done->y;
         cx = enc_done->cx;
@@ -2740,7 +2739,7 @@ xrdp_mm_process_enc_done(struct xrdp_mm *self)
         /* free enc_done */
         if (enc_done->last)
         {
-            LLOGLN(10, ("xrdp_mm_process_enc_done: last set"));
+            LOG_DEVEL(LOG_LEVEL_DEBUG, "xrdp_mm_process_enc_done: last set");
             if (self->wm->client_info->use_frame_acks == 0)
             {
                 self->mod->mod_frame_ack(self->mod,
@@ -2838,14 +2837,14 @@ xrdp_mm_frame_ack(struct xrdp_mm *self, int frame_id)
 {
     struct xrdp_encoder *encoder;
 
-    LLOGLN(10, ("xrdp_mm_frame_ack:"));
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "xrdp_mm_frame_ack:");
     if (self->wm->client_info->use_frame_acks == 0)
     {
         return 1;
     }
     encoder = self->encoder;
-    LLOGLN(10, ("xrdp_mm_frame_ack: incoming %d, client %d, server %d",
-           frame_id, encoder->frame_id_client, encoder->frame_id_server));
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "xrdp_mm_frame_ack: incoming %d, client %d, server %d",
+              frame_id, encoder->frame_id_client, encoder->frame_id_server);
     if ((frame_id < 0) || (frame_id > encoder->frame_id_server))
     {
         /* if frame_id is negative or bigger then what server last sent
@@ -2995,20 +2994,20 @@ server_paint_rect(struct xrdp_mod *mod, int x, int y, int cx, int cy,
 
 /*****************************************************************************/
 int
-server_paint_rect_bpp(struct xrdp_mod* mod, int x, int y, int cx, int cy,
-                      char* data, int width, int height, int srcx, int srcy,
+server_paint_rect_bpp(struct xrdp_mod *mod, int x, int y, int cx, int cy,
+                      char *data, int width, int height, int srcx, int srcy,
                       int bpp)
 {
-    struct xrdp_wm* wm;
-    struct xrdp_bitmap* b;
-    struct xrdp_painter* p;
+    struct xrdp_wm *wm;
+    struct xrdp_bitmap *b;
+    struct xrdp_painter *p;
 
-    p = (struct xrdp_painter*)(mod->painter);
+    p = (struct xrdp_painter *)(mod->painter);
     if (p == 0)
     {
         return 0;
     }
-    wm = (struct xrdp_wm*)(mod->wm);
+    wm = (struct xrdp_wm *)(mod->wm);
     b = xrdp_bitmap_create_with_data(width, height, bpp, data, wm);
     xrdp_painter_copy(p, b, wm->target_surface, x, y, cx, cy, srcx, srcy);
     xrdp_bitmap_delete(b);
@@ -3017,25 +3016,25 @@ server_paint_rect_bpp(struct xrdp_mod* mod, int x, int y, int cx, int cy,
 
 /*****************************************************************************/
 int
-server_composite(struct xrdp_mod* mod, int srcidx, int srcformat,
-                 int srcwidth, int srcrepeat, int* srctransform,
+server_composite(struct xrdp_mod *mod, int srcidx, int srcformat,
+                 int srcwidth, int srcrepeat, int *srctransform,
                  int mskflags, int mskidx, int mskformat, int mskwidth,
                  int mskrepeat, int op, int srcx, int srcy,
                  int mskx, int msky, int dstx, int dsty,
                  int width, int height, int dstformat)
 {
-    struct xrdp_wm* wm;
-    struct xrdp_bitmap* b;
-    struct xrdp_bitmap* msk;
-    struct xrdp_painter* p;
-    struct xrdp_os_bitmap_item* bi;
+    struct xrdp_wm *wm;
+    struct xrdp_bitmap *b;
+    struct xrdp_bitmap *msk;
+    struct xrdp_painter *p;
+    struct xrdp_os_bitmap_item *bi;
 
-    p = (struct xrdp_painter*)(mod->painter);
+    p = (struct xrdp_painter *)(mod->painter);
     if (p == 0)
     {
         return 0;
     }
-    wm = (struct xrdp_wm*)(mod->wm);
+    wm = (struct xrdp_wm *)(mod->wm);
     b = 0;
     msk = 0;
     bi = xrdp_cache_get_os_bitmap(wm->cache, srcidx);
@@ -3061,30 +3060,29 @@ server_composite(struct xrdp_mod* mod, int srcidx, int srcformat,
     }
     else
     {
-        g_writeln("server_composite: error finding id %d or %d", srcidx, mskidx);
+        LOG(LOG_LEVEL_WARNING, "server_composite: error finding id %d or %d", srcidx, mskidx);
     }
     return 0;
 }
 
 /*****************************************************************************/
 int
-server_paint_rects(struct xrdp_mod* mod, int num_drects, short *drects,
+server_paint_rects(struct xrdp_mod *mod, int num_drects, short *drects,
                    int num_crects, short *crects, char *data, int width,
                    int height, int flags, int frame_id)
 {
-    struct xrdp_wm* wm;
-    struct xrdp_mm* mm;
-    struct xrdp_painter* p;
+    struct xrdp_wm *wm;
+    struct xrdp_mm *mm;
+    struct xrdp_painter *p;
     struct xrdp_bitmap *b;
     short *s;
     int index;
     XRDP_ENC_DATA *enc_data;
 
-    wm = (struct xrdp_wm*)(mod->wm);
+    wm = (struct xrdp_wm *)(mod->wm);
     mm = wm->mm;
 
-    LLOGLN(10, ("server_paint_rects:"));
-    LLOGLN(10, ("server_paint_rects: %p", mm->encoder));
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "server_paint_rects: %p", mm->encoder);
 
     if (mm->encoder != 0)
     {
@@ -3125,7 +3123,7 @@ server_paint_rects(struct xrdp_mod* mod, int num_drects, short *drects,
         enc_data->frame_id = frame_id;
         if (width == 0 || height == 0)
         {
-            LLOGLN(10, ("server_paint_rects: error"));
+            LOG_DEVEL(LOG_LEVEL_WARNING, "server_paint_rects: error");
         }
 
         /* insert into fifo for encoder thread to process */
@@ -3139,9 +3137,9 @@ server_paint_rects(struct xrdp_mod* mod, int num_drects, short *drects,
         return 0;
     }
 
-    //g_writeln("server_paint_rects:");
+    LOG(LOG_LEVEL_TRACE, "server_paint_rects:");
 
-    p = (struct xrdp_painter*)(mod->painter);
+    p = (struct xrdp_painter *)(mod->painter);
     if (p == 0)
     {
         return 0;
@@ -3166,7 +3164,7 @@ server_session_info(struct xrdp_mod *mod, const char *data, int data_bytes)
 {
     struct xrdp_wm *wm;
 
-    LLOGLN(10, ("server_session_info:"));
+    LOG_DEVEL(LOG_LEVEL_DEBUG, "server_session_info:");
     wm = (struct xrdp_wm *)(mod->wm);
     return libxrdp_send_session_info(wm->session, data, data_bytes);
 }
@@ -3220,7 +3218,7 @@ server_msg(struct xrdp_mod *mod, char *msg, int code)
 
     if (code == 1)
     {
-        g_writeln("%s",msg);
+        LOG(LOG_LEVEL_INFO, "%s", msg);
         return 0;
     }
 
@@ -3464,9 +3462,9 @@ server_reset(struct xrdp_mod *mod, int width, int height, int bpp)
 
     /* if same (and only one monitor on client) don't need to do anything */
     if (wm->client_info->width == width &&
-        wm->client_info->height == height &&
-        wm->client_info->bpp == bpp &&
-        (wm->client_info->monitorCount == 0 || wm->client_info->multimon == 0))
+            wm->client_info->height == height &&
+            wm->client_info->bpp == bpp &&
+            (wm->client_info->monitorCount == 0 || wm->client_info->multimon == 0))
     {
         return 0;
     }
@@ -3564,7 +3562,7 @@ server_create_os_surface(struct xrdp_mod *mod, int rdpindex,
 
     if (error != 0)
     {
-        log_message(LOG_LEVEL_ERROR,"server_create_os_surface: xrdp_cache_add_os_bitmap failed");
+        LOG(LOG_LEVEL_ERROR, "server_create_os_surface: xrdp_cache_add_os_bitmap failed");
         return 1;
     }
 
@@ -3575,20 +3573,20 @@ server_create_os_surface(struct xrdp_mod *mod, int rdpindex,
 
 /*****************************************************************************/
 int
-server_create_os_surface_bpp(struct xrdp_mod* mod, int rdpindex,
+server_create_os_surface_bpp(struct xrdp_mod *mod, int rdpindex,
                              int width, int height, int bpp)
 {
-    struct xrdp_wm* wm;
-    struct xrdp_bitmap* bitmap;
+    struct xrdp_wm *wm;
+    struct xrdp_bitmap *bitmap;
     int error;
 
-    wm = (struct xrdp_wm*)(mod->wm);
+    wm = (struct xrdp_wm *)(mod->wm);
     bitmap = xrdp_bitmap_create(width, height, bpp,
                                 WND_TYPE_OFFSCREEN, wm);
     error = xrdp_cache_add_os_bitmap(wm->cache, bitmap, rdpindex);
     if (error != 0)
     {
-        g_writeln("server_create_os_surface_bpp: xrdp_cache_add_os_bitmap failed");
+        LOG(LOG_LEVEL_ERROR, "server_create_os_surface_bpp: xrdp_cache_add_os_bitmap failed");
         return 1;
     }
     bitmap->item_index = rdpindex;
@@ -3604,18 +3602,18 @@ server_switch_os_surface(struct xrdp_mod *mod, int rdpindex)
     struct xrdp_os_bitmap_item *bi;
     struct xrdp_painter *p;
 
-    //g_writeln("server_switch_os_surface: id 0x%x", id);
+    LOG(LOG_LEVEL_DEBUG, "server_switch_os_surface: id 0x%x", rdpindex);
     wm = (struct xrdp_wm *)(mod->wm);
 
     if (rdpindex == -1)
     {
-        //g_writeln("server_switch_os_surface: setting target_surface to screen");
+        LOG(LOG_LEVEL_DEBUG, "server_switch_os_surface: setting target_surface to screen");
         wm->target_surface = wm->screen;
         p = (struct xrdp_painter *)(mod->painter);
 
         if (p != 0)
         {
-            //g_writeln("setting target");
+            LOG(LOG_LEVEL_DEBUG, "setting target");
             wm_painter_set_target(p);
         }
 
@@ -3626,19 +3624,19 @@ server_switch_os_surface(struct xrdp_mod *mod, int rdpindex)
 
     if ((bi != 0) && (bi->bitmap != 0))
     {
-        //g_writeln("server_switch_os_surface: setting target_surface to rdpid %d", id);
+        LOG(LOG_LEVEL_DEBUG, "server_switch_os_surface: setting target_surface to rdpid %d", rdpindex);
         wm->target_surface = bi->bitmap;
         p = (struct xrdp_painter *)(mod->painter);
 
         if (p != 0)
         {
-            //g_writeln("setting target");
+            LOG(LOG_LEVEL_DEBUG, "setting target");
             wm_painter_set_target(p);
         }
     }
     else
     {
-        log_message(LOG_LEVEL_ERROR,"server_switch_os_surface: error finding id %d", rdpindex);
+        LOG(LOG_LEVEL_WARNING, "server_switch_os_surface: error finding id %d", rdpindex);
     }
 
     return 0;
@@ -3651,20 +3649,20 @@ server_delete_os_surface(struct xrdp_mod *mod, int rdpindex)
     struct xrdp_wm *wm;
     struct xrdp_painter *p;
 
-    //g_writeln("server_delete_os_surface: id 0x%x", id);
+    LOG(LOG_LEVEL_DEBUG, "server_delete_os_surface: id 0x%x", rdpindex);
     wm = (struct xrdp_wm *)(mod->wm);
 
     if (wm->target_surface->type == WND_TYPE_OFFSCREEN)
     {
         if (wm->target_surface->id == rdpindex)
         {
-            g_writeln("server_delete_os_surface: setting target_surface to screen");
+            LOG(LOG_LEVEL_DEBUG, "server_delete_os_surface: setting target_surface to screen");
             wm->target_surface = wm->screen;
             p = (struct xrdp_painter *)(mod->painter);
 
             if (p != 0)
             {
-                //g_writeln("setting target");
+                LOG(LOG_LEVEL_DEBUG, "setting target");
                 wm_painter_set_target(p);
             }
         }
@@ -3701,7 +3699,7 @@ server_paint_rect_os(struct xrdp_mod *mod, int x, int y, int cx, int cy,
     }
     else
     {
-        log_message(LOG_LEVEL_ERROR,"server_paint_rect_os: error finding id %d", rdpindex);
+        LOG(LOG_LEVEL_ERROR, "server_paint_rect_os: error finding id %d", rdpindex);
     }
 
     return 0;
@@ -3818,9 +3816,9 @@ server_monitored_desktop(struct xrdp_mod *mod,
 
 /*****************************************************************************/
 int
-server_add_char_alpha(struct xrdp_mod* mod, int font, int character,
+server_add_char_alpha(struct xrdp_mod *mod, int font, int character,
                       int offset, int baseline,
-                      int width, int height, char* data)
+                      int width, int height, char *data)
 {
     struct xrdp_font_char fi;
 
@@ -3831,6 +3829,6 @@ server_add_char_alpha(struct xrdp_mod* mod, int font, int character,
     fi.incby = 0;
     fi.data = data;
     fi.bpp = 8;
-    return libxrdp_orders_send_font(((struct xrdp_wm*)mod->wm)->session,
+    return libxrdp_orders_send_font(((struct xrdp_wm *)mod->wm)->session,
                                     &fi, font, character);
 }
