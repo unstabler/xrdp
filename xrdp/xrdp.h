@@ -147,8 +147,12 @@ xrdp_wm_get_wait_objs(struct xrdp_wm *self, tbus *robjs, int *rc,
                       tbus *wobjs, int *wc, int *timeout);
 int
 xrdp_wm_check_wait_objs(struct xrdp_wm *self);
+const char *
+xrdp_wm_login_state_to_str(enum wm_login_state login_state);
 int
 xrdp_wm_set_login_state(struct xrdp_wm *self, enum wm_login_state login_state);
+int
+xrdp_wm_can_resize(struct xrdp_wm *self);
 void
 xrdp_wm_mod_connect_done(struct xrdp_wm *self, int status);
 
@@ -397,18 +401,38 @@ xrdp_bitmap_compress(char *in_data, int width, int height,
 
 /* xrdp_mm.c */
 
-struct dynamic_monitor_layout
+enum display_resize_state
 {
-    int flags;
-    int left;
-    int top;
-    int width;
-    int height;
-    int physical_width;
-    int physical_height;
-    int orientation;
-    int desktop_scale_factor;
-    int device_scale_factor;
+    WMRZ_QUEUED = 0,
+    WMRZ_ENCODER_DELETE,
+    WMRZ_SERVER_MONITOR_RESIZE,
+    WMRZ_SERVER_VERSION_MESSAGE,
+    WMRZ_XRDP_CORE_RESIZE,
+    WMRZ_ENCODER_CREATE,
+    WMRZ_SERVER_INVALIDATE,
+    WMRZ_COMPLETE,
+    WMRZ_ERROR
+};
+
+#define XRDP_DISPLAY_RESIZE_STATE_TO_STR(status) \
+    ((status) == WMRZ_QUEUED ? "WMRZ_QUEUED" : \
+     (status) == WMRZ_ENCODER_DELETE ? "WMRZ_ENCODER_DELETE" : \
+     (status) == WMRZ_SERVER_MONITOR_RESIZE ? "WMRZ_SERVER_MONITOR_RESIZE" : \
+     (status) == WMRZ_SERVER_VERSION_MESSAGE ? "WMRZ_SERVER_VERSION_MESSAGE" : \
+     (status) == WMRZ_XRDP_CORE_RESIZE ? "WMRZ_XRDP_CORE_RESIZE" : \
+     (status) == WMRZ_ENCODER_CREATE ? "WMRZ_ENCODER_CREATE" : \
+     (status) == WMRZ_SERVER_INVALIDATE ? "WMRZ_SERVER_INVALIDATE" : \
+     (status) == WMRZ_COMPLETE ? "WMRZ_COMPLETE" : \
+     (status) == WMRZ_ERROR ? "WMRZ_ERROR" : \
+     "unknown" \
+    )
+
+struct dynamic_monitor_description
+{
+    struct display_size_description description;
+    enum display_resize_state state;
+    int last_state_update_timestamp;
+    int start_time;
 };
 
 int

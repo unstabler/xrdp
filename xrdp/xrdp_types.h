@@ -344,6 +344,8 @@ struct xrdp_mm
     int cs2xr_cid_map[256];
     int xr2cr_cid_map[256];
     int dynamic_monitor_chanid;
+    struct list *resize_queue;
+    tbus resize_state_machine;
 };
 
 struct xrdp_key_info
