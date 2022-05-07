@@ -457,9 +457,9 @@ process_enc_rfx(struct xrdp_encoder *self, XRDP_ENC_DATA *enc)
                     tiles[index].y = y;
                     tiles[index].cx = cx;
                     tiles[index].cy = cy;
-                    tiles[index].quant_y = 0;
-                    tiles[index].quant_cb = 0;
-                    tiles[index].quant_cr = 0;
+                    tiles[index].quant_y = self->quant_idx_y;
+                    tiles[index].quant_cb = self->quant_idx_u;
+                    tiles[index].quant_cr = self->quant_idx_v;
                 }
 
                 count = enc->num_drects;
@@ -482,7 +482,8 @@ process_enc_rfx(struct xrdp_encoder *self, XRDP_ENC_DATA *enc)
                                                 enc->width, enc->height,
                                                 enc->width * 4,
                                                 rfxrects, enc->num_drects,
-                                                tiles, tiles_left, 0, 0);
+                                                tiles, enc->num_crects,
+                                                self->quants, self->num_quants);
             }
         }
 
@@ -503,6 +504,10 @@ process_enc_rfx(struct xrdp_encoder *self, XRDP_ENC_DATA *enc)
         enc_done->enc = enc;
         enc_done->cx = self->mm->wm->screen->width;
         enc_done->cy = self->mm->wm->screen->height;
+        if (self->gfx)
+        {
+            enc_done->flags = 2;
+        }
 
         enc_done->continuation = all_tiles_written > 0;
         if (tiles_written > 0)
